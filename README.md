@@ -35,3 +35,4 @@ root/
 **chat.css-#Styles**
 **webrtc.js-#Signaling, DataChannel, mailbox & chunk logic**
 config.example.json
+README.md
