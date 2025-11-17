@@ -33,6 +33,5 @@ root/
 **home.html-#Hub page**
 **chat.html-#Ephemeral chat UI**
 **chat.css-#Styles**
-**webrtc.js-#Signaling, DataChannel, mailbox & chunk logic
-**
+**webrtc.js-#Signaling, DataChannel, mailbox & chunk logic**
 config.example.json
