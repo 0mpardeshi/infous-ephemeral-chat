@@ -28,12 +28,11 @@ Tech Stack
 
 Project Structure
 root/
-│── index.html        # Entry passcode gate
-│── id.html           # Second login gate
-│── home.html         # Hub page
-│── chat.html         # Ephemeral chat UI
-│── chat.css          # Styles
-│── webrtc.js         # Signaling, DataChannel, mailbox & chunk logic
-│── config.example.json
-└── README.md
-
+**index.html-#Entry passcode gate**
+**id.html-#Second login gate**
+**home.html-#Hub page**
+**chat.html-#Ephemeral chat UI**
+**chat.css-#Styles**
+**webrtc.js-#Signaling, DataChannel, mailbox & chunk logic
+**
+config.example.json
