@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Info US • Entry</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+:root {
+--bg: #000;
+--card: #0f0f10;
+--text: #fff;
+--muted: #aaa;
+--input-bg: #141416;
+--input-bd: #2a2b2f;
+--btn: #0078ff;
+--btn-hover: #005fcc;
+--err: #ff4d4d;
+--warn: #ffcc00; /* Added for dev mode warning */
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body.gate {
+margin: 0;
+background: var(--bg);
+color: var(--text);
+display: grid;
+place-items: center;
+font-family: "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+}
+.card {
+width: min(92vw, 360px);
+background: var(--card);
+border: 1px solid #1b1c1f;
+border-radius: 16px;
+padding: 28px 22px 24px;
+box-shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+h1 {
+margin: 0 0 6px;
+font-size: 22px;
+letter-spacing: .2px;
+}
+.muted { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+form { display: flex; flex-direction: column; gap: 10px; }
+input[type="password"] {
+width: 100%;
+background: var(--input-bg);
+border: 1px solid var(--input-bd);
+color: var(--text);
+padding: 12px 12px;
+border-radius: 10px;
+outline: none;
+transition: border-color .2s ease;
+font-size: 14px;
+}
+input::placeholder { color: #81828a; }
+input:focus { border-color: #3d8bfd; }
+button {
+background: var(--btn);
+color: #fff;
+border: none;
+border-radius: 10px;
+padding: 12px 12px;
+font-size: 14px;
+cursor: pointer;
+transition: background .2s ease, transform .02s ease-in-out;
+}
+button:hover { background: var(--btn-hover); }
+button:active { transform: translateY(1px); }
+.err {
+color: var(--err);
+min-height: 18px;
+font-size: 13px;
+}
+.shake { animation: shake .3s; }
+@keyframes shake {
+0%,100%{transform:translateX(0)}
+25%{transform:translateX(-5px)}
+75%{transform:translateX(5px)}
+}
+/* New style for dev mode banner */
+.dev-mode-banner {
+background: var(--warn);
+color: #333;
+padding: 8px 12px;
+border-radius: 8px;
+margin-bottom: 15px;
+font-size: 12px;
+text-align: center;
+font-weight: bold;
+}
+</style>
+<script>
+// If a previous session asked to force-lock, honor it and start fresh.
+if (localStorage.getItem('__forceLock__') === '1') {
+try { sessionStorage.clear(); } catch (e) {}
+localStorage.removeItem('__forceLock__');
+}
+// Always start fresh at Lock 1 (safety).
+try { sessionStorage.clear(); } catch (e) {}
+
+// Utility function for SHA-256 hashing
+async function sha256(message) {
+const msgBuffer = new TextEncoder().encode(message);
+const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+const hashArray = Array.from(new Uint8Array(hashBuffer));
+const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+return hashHex;
+}
+
+// Global config object to store fetched data
+let appConfig = {};
+let isDevMode = false; // Flag to indicate dev mode
+</script>
+</head>
+<body class="gate">
+<div class="card">
+<div id="devModeBanner" class="dev-mode-banner" style="display: none;">
+DEVELOPMENT LOGIN - NOT SECURE
+</div>
+<h1>Info US</h1>
+<p class="muted">Private space — enter passcode</p>
+<form id="passcodeForm" autocomplete="off">
+<input id="pass" type="password" placeholder="Passcode" required />
+<button type="submit">Unlock</button>
+<div id="err" class="err" aria-live="polite"></div>
+</form>
+</div>
+<script>
+// README:
+// To use in production/secure mode, create a `config.json` file at the root
+// of your web server with the following structure:
+// {
+// "entryPasscodeHash": "YOUR_SHA256_HASH_OF_YOUR_PASSCODE",
+// "users": { /* user data for id.html, see its config loading */ }
+// }
+// You can generate a SHA256 hash online or using a simple script.
+// For example, for "pookiemotuom", the hash would be
+// "822709e931e9c5220c3a26a575e927f80590ed86488a09f874c776fb082e6d11"
+
+const form = document.getElementById('passcodeForm');
+const passEl = document.getElementById('pass');
+const errEl = document.getElementById('err');
+const devModeBanner = document.getElementById('devModeBanner');
+
+async function loadConfig() {
+try {
+const response = await fetch('/config.json');
+if (!response.ok) throw new Error('config.json not found');
+appConfig = await response.json();
+if (!appConfig.entryPasscodeHash) throw new Error('Invalid config.json: missing entryPasscodeHash');
+} catch (e) {
+console.warn("Failed to load config.json for 'index.html', activating development login mode:", e.message);
+isDevMode = true;
+devModeBanner.style.display = 'block';
+}
+}
+
+// Load config before setting up event listener
+loadConfig().then(() => {
+form.addEventListener('submit', async (e) => {
+e.preventDefault();
+const val = passEl.value || "";
+errEl.textContent = ''; // Clear previous errors
+
+let passcodeValid = false;
+
+if (isDevMode) {
+// Dev mode: any non-empty passcode proceeds
+if (val.length > 0) {
+passcodeValid = true;
+} else {
+errEl.textContent = 'Please enter a passcode (Dev Mode)';
+}
+} else {
+// Production mode: validate against hashed passcode from config
+const hashedVal = await sha256(val);
+if (hashedVal === appConfig.entryPasscodeHash) {
+passcodeValid = true;
+} else {
+errEl.textContent = 'Wrong passcode!';
+}
+}
+
+if (passcodeValid) {
+sessionStorage.setItem('lock1', 'ok');
+sessionStorage.setItem('lock1_at', String(Date.now()));
+// relative path (works locally and on hosting)
+window.location.href = 'id.html';
+} else {
+errEl.classList.add('shake');
+setTimeout(()=>errEl.classList.remove('shake'), 500);
+}
+});
+});
+
+
+passEl.addEventListener('keydown', (e) => {
+if (e.key === 'Enter') form.requestSubmit();
+});
+</script>
+</body>
+</html>

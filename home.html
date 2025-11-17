@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Info US 💡</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f9fafc;
+      color: #333;
+    }
+    header {
+      background: #2b6777;
+      color: white;
+      padding: 1rem;
+      text-align: center;
+    }
+    nav {
+      display: flex;
+      justify-content: center;
+      background: #52ab98;
+    }
+    nav a {
+      padding: 1rem;
+      text-decoration: none;
+      color: white;
+      font-weight: bold;
+    }
+    nav a:hover {
+      background: #3c8d7a;
+    }
+    main {
+      padding: 2rem;
+      max-width: 1000px;
+      margin: auto;
+    }
+    section {
+      margin-bottom: 3rem;
+    }
+    h2 {
+      border-left: 6px solid #52ab98;
+      padding-left: 10px;
+      margin-bottom: 1rem;
+      color: #2b6777;
+    }
+    .resources a {
+      display: block;
+      margin: 5px 0;
+      color: #2b6777;
+      text-decoration: none;
+    }
+    .resources a:hover {
+      text-decoration: underline;
+    }
+    .motivation {
+      font-size: 1.2rem;
+      font-style: italic;
+      text-align: center;
+      margin-top: 1rem;
+      color: #444;
+    }
+    footer {
+      text-align: center;
+      background: #2b6777;
+      color: white;
+      padding: 1rem;
+      margin-top: 2rem;
+    }
+  </style>
+
+  <script>
+  // ✅ Guard: User must have passed Lock 1 & Lock 2
+  if (sessionStorage.getItem('lock1') !== 'ok' || sessionStorage.getItem('lock2') !== 'ok') {
+    localStorage.setItem('__forceLock__', '1');
+    location.href = 'index.html';
+  }
+
+  // ✅ Disable back/forward navigation
+  history.pushState(null, null, location.href);
+  window.onpopstate = function () {
+    history.go(1);
+  };
+
+  // ✅ Navigation flag for chat
+  let navigatingToChat = false;
+
+  function goToChat() {
+    navigatingToChat = true;
+    location.href = 'chat.html';
+  }
+
+  // ✅ Vanish logic: If tab closed, refresh, or background → reset session
+  const vanish = () => {
+    if (!navigatingToChat) {
+      try { sessionStorage.clear(); } catch (e) {}
+      localStorage.setItem('__forceLock__', '1');
+    }
+  };
+
+  addEventListener('beforeunload', vanish);
+  addEventListener('pagehide', vanish);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) vanish();
+  });
+</script>
+
+</head>
+<body>
+  <header>
+    <h1>Info US 💡</h1>
+    <p>Open Source Knowledge Hub for Students</p>
+  </header>
+
+  <nav>
+  <a href="home.html">💡 Home</a>
+  <a href="#" onclick="goToChat()">🗒️ Student Notes</a>
+  <a href="#about">ℹ️ About</a>
+</nav>
+
+
+  <main>
+    <!-- Featured Articles & News -->
+    <section>
+      <h2>📰 Latest Education News</h2>
+      <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+        <a href="https://www.unesco.org/en/newsroom#" target="_blank" style="flex:1; text-decoration:none; color:#333;">
+          <img src="https://www.unesco.org/sites/default/files/styles/1600x900/public/2022-11/education-banner.jpg" alt="UNESCO News" style="width:100%; border-radius:10px;">
+          <p><strong>UNESCO Education Updates</strong><br>Stay updated with global education news and policy changes.</p>
+        </a>
+        <a href="https://www.edx.org/" target="_blank" style="flex:1; text-decoration:none; color:#333;">
+          <img src="https://www.edx.org/sites/default/files/2021-06/edx-og-image.png" alt="edX News" style="width:100%; border-radius:10px;">
+          <p><strong>edX Articles & Blogs</strong><br>Read the latest on free courses and digital learning innovations.</p>
+        </a>
+      </div>
+    </section>
+
+    <!-- Upcoming Events -->
+    <section>
+      <h2>📅 Upcoming Student Events</h2>
+      <ul>
+        <li><a href="https://events.unesco.org/" target="_blank">UNESCO Education Events</a> – Conferences & global summits.</li>
+        <li><a href="https://news.mit.edu/topic/education" target="_blank">MIT Education Seminars</a> – Talks & workshops for students.</li>
+        <li><a href="https://about.coursera.org/events/" target="_blank">Coursera Student Webinars</a> – Free live sessions to boost skills.</li>
+      </ul>
+    </section>
+
+    <!-- Student Voices -->
+    <section>
+      <h2>🎤 Student Voices</h2>
+      <blockquote style="font-style:italic; color:#444;">“Joining open learning platforms connected me to a global network of passionate learners.” – Student, Coursera</blockquote>
+      <blockquote style="font-style:italic; color:#444;">“MIT OCW gave me access to world-class resources I could never afford otherwise.” – Student, India</blockquote>
+    </section>
+
+    <!-- Literacy Chart -->
+    <section>
+      <h2>📊 Global Literacy Rates</h2>
+      <canvas id="literacyChart" width="400" height="200"></canvas>
+    </section>
+
+    <!-- Education & Environment -->
+    <section>
+      <h2>🌍 Education & Environment</h2>
+      <p>Studies show that education plays a critical role in environmental awareness and sustainable development. 
+      Higher literacy rates are linked to better environmental decisions in communities.</p>
+      <p>Read more on <a href="https://www.unesco.org/en/education" target="_blank">UNESCO Education for Sustainable Development</a>.</p>
+    </section>
+
+    <!-- Motivation -->
+    <section>
+      <h2>💡 Motivation Corner</h2>
+      <p class="motivation" id="quote"></p>
+    </section>
+
+    <!-- Resources -->
+    <section class="resources">
+      <h2>📚 Student Resources</h2>
+      <a href="https://www.khanacademy.org/" target="_blank">Khan Academy</a>
+      <a href="https://ocw.mit.edu/" target="_blank">MIT OpenCourseWare</a>
+      <a href="https://www.coursera.org/courses?query=free" target="_blank">Coursera Free Courses</a>
+    </section>
+
+    <!-- Career -->
+    <section class="resources">
+      <h2>🎓 Career Guidelines</h2>
+      <a href="https://www.unesco.org/en/education" target="_blank">UNESCO Student Career Resources</a>
+      <a href="https://www.edx.org/" target="_blank">edX Free Programs</a>
+    </section>
+
+    <!-- Open Source -->
+    <section class="resources">
+      <h2>🔓 Open Source Projects</h2>
+      <a href="https://github.com/explore" target="_blank">GitHub Explore Open Source</a>
+      <a href="https://opensource.google/projects/explore" target="_blank">Google Open Source</a>
+    </section>
+
+    <!-- About -->
+    <section id="about">
+      <h2>ℹ️ About Info US</h2>
+      <p>Info US is an open-source student platform.  
+      Our double-layer login ensures only registered students, in accordance with academic guidelines, can access internal resources.  
+      This initiative aims to promote knowledge, career growth, and collaborative open-source learning.</p>
+    </section>
+  </main>
+
+  <footer>
+    © 2025 Info US | Student Knowledge Network
+  </footer>
+
+  <script>
+    // Literacy Chart
+    const ctx = document.getElementById('literacyChart');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['World', 'Asia', 'Africa', 'Europe', 'Americas'],
+        datasets: [{
+          label: 'Literacy Rate (%)',
+          data: [86, 83, 65, 99, 94],
+          backgroundColor: '#52ab98'
+        }]
+      },
+      options: {
+        scales: {
+          y: { beginAtZero: true }
+        }
+      }
+    });
+
+    // Motivation Quotes
+    const quotes = [
+      "Education is the most powerful weapon you can use to change the world. – Nelson Mandela",
+      "The beautiful thing about learning is that no one can take it away from you. – B.B. King",
+      "An investment in knowledge pays the best interest. – Benjamin Franklin",
+      "Learning never exhausts the mind. – Leonardo da Vinci"
+    ];
+    let index = 0;
+    function showQuote() {
+      document.getElementById("quote").textContent = quotes[index];
+      index = (index + 1) % quotes.length;
+    }
+    setInterval(showQuote, 4000);
+    showQuote();
+  </script>
+</body>
+</html>

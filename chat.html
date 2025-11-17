@@ -1,0 +1,1208 @@
+--- START OF FILE chat.html ---
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Student Notes — Info US</title>
+<link rel="stylesheet" href="chat.css">
+<meta name="theme-color" content="#0b0c0f" />
+<style>
+/* small status indicator style — you can move to chat.css if desired */
+.status-ind { margin-left:8px; font-size:0.9em; color: #888; }
+.status-ind.pending { color: #b8860b; } /* amber */
+.status-ind.seen { color: #2e8b57; } /* green */
+/* Added for media progress indicator */
+.media-progress-bar {
+  width: 100%;
+  height: 4px;
+  background-color: #f3f3f3;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.media-progress-bar-inner {
+  height: 100%;
+  background-color: #4CAF50;
+  width: 0%;
+  transition: width 0.1s ease-out;
+}
+.media-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100px; /* or a suitable minimum height */
+  background-color: #eee;
+  border-radius: 8px;
+  color: #666;
+  font-size: 0.9em;
+  padding: 10px;
+  box-sizing: border-box;
+}
+</style>
+</head>
+<body>
+<script>
+// ---- NAV FLAG (used to avoid accidental vanish on in-app navigation)
+let __navTarget = "";
+</script>
+<!-- If a previous unload set the force-lock (manual refresh), redirect to index (first-lock).
+This runs before the rest of the guard logic so manual reloads cause the app to lock. -->
+<script>
+try {
+if (localStorage.getItem('__forceLock__') === '1') {
+// clear the flag so it doesn't redirect repeatedly
+localStorage.removeItem('__forceLock__');
+// redirect to login/entry page (first-lock)
+location.href = 'index.html';
+}
+} catch (e) { /* ignore errors reading storage */ }
+</script>
+<!-- GUARD + SMART VANISH -->
+<script>
+(function () {
+// Guard access: must have passed both locks
+if (sessionStorage.getItem('lock1') !== 'ok' || sessionStorage.getItem('lock2') !== 'ok') {
+// don't destroy pending messages here; they now persist in localStorage
+localStorage.setItem('__forceLock__', '1');
+location.href = 'index.html';
+return;
+}
+
+// Vanish behavior (Snap-like): remove ONLY messages that BOTH users have seen (and are not saved).
+// NOTE: removed sessionStorage.clear() to avoid wiping lock1/lock2 (this caused the "first-lock" redirect bug).
+function vanishSmart() {
+if (__navTarget === "home" || __navTarget === "chat") return; // internal nav → don't run vanish here
+try {
+const userId = sessionStorage.getItem('userId') || 'local-user';
+const key = `infous_ephemeral_${userId}`; // now backed by localStorage
+const raw = localStorage.getItem(key) || '[]';
+let arr = JSON.parse(raw);
+
+// keep messages that are NOT fully seen-by-both, or are saved
+arr = arr.filter(m => m.saved || !(m.seenBy && m.seenBy.me && m.seenBy.other));
+localStorage.setItem(key, JSON.stringify(arr));
+} catch (_) {}
+
+// do NOT clear entire sessionStorage here — that removes locks and causes redirect to index.html
+localStorage.setItem('__forceLock__', '1');
+}
+
+window.addEventListener('beforeunload', vanishSmart);
+window.addEventListener('pagehide', vanishSmart);
+document.addEventListener('visibilitychange', () => {
+if (document.hidden) vanishSmart();
+});
+})();
+</script>
+<!-- Top Bar -->
+<header class="topbar">
+<div class="top-left">
+<button id="btnHome" class="icon-btn" title="Home">💡</button>
+<button id="btnChat" class="icon-btn active" title="Chat">🗒️</button>
+</div>
+<div class="title-group">
+  <div class="app-title">Info US</div>
+  <div class="subtitle" id="statusText">Connected Securely 🔐</div>
+</div>
+
+<div class="top-right">
+  <div class="partner" id="partnerName">@Partner</div>
+  <button id="btnMenu" class="icon-btn" title="Saved">⋯</button>
+</div>
+</header>
+<!-- Main chat lane -->
+<main id="lane" class="lane" aria-live="polite"></main>
+<!-- Saved area (collapsible) -->
+<aside id="savedPanel" class="saved-panel">
+<div class="saved-header">
+<strong>Saved Messages</strong>
+<button id="closeSaved" class="small">Close</button>
+</div>
+<div id="savedList" class="saved-list"></div>
+</aside>
+<!-- Composer -->
+<footer class="composer">
+<div class="composer-left">
+<!-- Live camera shot -->
+<button id="cameraLive" class="icon-btn" title="Camera (live)">📷</button>
+</div>
+<div class="composer-middle">
+  <!-- switched to textarea (auto-grow), modern apps do this -->
+  <textarea id="msgInput" placeholder="Message..." rows="1"></textarea>
+</div>
+
+<div class="composer-right" id="rightIcons">
+  <button id="pickGallery" class="icon-btn" title="Gallery">🖼️</button>
+  <button id="pickFile" class="icon-btn" title="File">📎</button>
+  <button id="voiceRec" class="icon-btn" title="Voice">🎤</button>
+</div>
+
+<div class="composer-right" id="sendWrap" style="display:none;">
+  <button id="sendBtn" class="send-btn">Send</button>
+</div>
+
+<!-- hidden inputs for gallery/file -->
+<input type="file" id="galleryInput" accept="image/*,video/*" style="display:none" />
+<input type="file" id="fileInput" style="display:none" />
+</footer>
+<!-- Context menu template (in DOM but hidden) -->
+<div id="menuTemplate" class="context-menu" aria-hidden="true" style="display:none;">
+<button data-action="reply">Reply</button>
+<button data-action="edit">Edit</button>
+<button data-action="save">Save</button>
+<button data-action="unsave">Unsave</button>
+<button data-action="unsend" class="danger">Unsend</button>
+</div>
+<script>
+/* ---------------------------
+CHAT: Data model & helpers
+--------------------------- */
+const role = sessionStorage.getItem('userRole') || 'boy';
+const meLabel = sessionStorage.getItem('displayMe') || 'You';
+const otherLabel = sessionStorage.getItem('displayOther') || 'Partner';
+const userId = sessionStorage.getItem('userId') || 'local-user';
+
+document.getElementById('partnerName').textContent = otherLabel;
+document.getElementById('statusText').textContent = 'Connected Securely 🔐';
+
+// Storage keys
+const SAVED_KEY = `infous_saved_${userId}`; // persistent saved
+const EPHEMERAL_KEY = `infous_ephemeral_${userId}`; // now persistent pending (localStorage)
+
+// Saved
+function loadSaved(){ try { return JSON.parse(localStorage.getItem(SAVED_KEY) || '[]'); } catch(_) { return []; } }
+function saveSaved(arr){ localStorage.setItem(SAVED_KEY, JSON.stringify(arr)); }
+
+// Ephemeral/pending (now in localStorage so messages don't disappear when app relocks)
+let ephemeral = (function () {
+try { return JSON.parse(localStorage.getItem(EPHEMERAL_KEY) || '[]'); }
+catch (_) { return []; }
+})();
+
+function persistEphemeral(){
+try { localStorage.setItem(EPHEMERAL_KEY, JSON.stringify(ephemeral)); } catch(_){}
+}
+
+// message id
+function newId(){ return 'm_' + Date.now().toString(36) + '_' + Math.floor(Math.random()*1000); }
+
+/* ---------------------------
+IndexedDB: media outbox persistence
+--------------------------- */
+const DB_NAME = 'infous_media_outbox';
+const DB_STORE = 'outbox';
+
+function openMediaDB(){
+return new Promise((resolve, reject) => {
+const req = indexedDB.open(DB_NAME, 1);
+req.onupgradeneeded = (e) => {
+const db = e.target.result;
+if (!db.objectStoreNames.contains(DB_STORE)) {
+db.createObjectStore(DB_STORE, { keyPath: 'id' });
+}
+};
+req.onsuccess = (e) => resolve(e.target.result);
+req.onerror = (e) => reject(e);
+});
+}
+
+async function saveMediaToDB(entry){
+const db = await openMediaDB();
+return new Promise((resolve, reject) => {
+const tx = db.transaction(DB_STORE, 'readwrite');
+const store = tx.objectStore(DB_STORE);
+store.put(entry);
+tx.oncomplete = () => resolve();
+tx.onerror = () => reject(tx.error);
+});
+}
+
+async function deleteMediaFromDB(id){
+const db = await openMediaDB();
+return new Promise((resolve, reject) => {
+const tx = db.transaction(DB_STORE, 'readwrite');
+const store = tx.objectStore(DB_STORE);
+store.delete(id);
+tx.oncomplete = () => resolve();
+tx.onerror = () => reject(tx.error);
+});
+}
+
+async function getAllMediaFromDB(){
+const db = await openMediaDB();
+return new Promise((resolve, reject) => {
+const tx = db.transaction(DB_STORE, 'readonly');
+const store = tx.objectStore(DB_STORE);
+const req = store.getAll();
+req.onsuccess = () => resolve(req.result || []);
+req.onerror = () => reject(req.error);
+});
+}
+
+// No longer using blobToDataURL for sending over DataChannel for large files
+// function blobToDataURL(blob){
+// return new Promise((res,rej) => {
+// const fr = new FileReader();
+// fr.onload = () => res(fr.result);
+// fr.onerror = () => rej(fr.error);
+// fr.readAsDataURL(blob);
+// });
+// }
+
+/* ---------------------------
+RENDERING & VANISH
+--------------------------- */
+const lane = document.getElementById('lane');
+
+// -------------------
+// Seen observer (mark 'me' seen when message enters viewport)
+// -------------------
+const seenObserver = new IntersectionObserver((entries)=>{
+entries.forEach(ent=>{
+if (ent.isIntersecting) {
+const id = ent.target.dataset.id;
+const i = ephemeral.findIndex(m=>m.id===id);
+if (i>=0) {
+if (!ephemeral[i].seenBy) ephemeral[i].seenBy = {me:false, other:false};
+if (!ephemeral[i].seenBy.me) {
+ephemeral[i].seenBy.me = true;
+persistEphemeral();
+// send a 'seen' ack to peer (will use webrtc.sendOrStore fallback if offline)
+try { if (typeof sendOverDataChannel === 'function') sendOverDataChannel({type:'seen', id}); } catch(_){}
+// Immediately check whether both sides have now seen it → vanish if allowed
+tryVanish(id);
+}
+}
+}
+});
+}, {threshold: 0.6});
+
+/* ---------------------------
+helper: remove DOM + unobserve safely
+--------------------------- */
+function removeMessageFromDOM(msgId){
+const el = document.querySelector(`[data-id="${msgId}"]`);
+if (!el) return;
+try { seenObserver.unobserve(el); } catch(_){}
+// revoke blob/object URLs to free memory (media)
+try {
+const imgs = el.querySelectorAll('img, video, audio');
+imgs.forEach(n => {
+try {
+if (n.src && n.src.startsWith('blob:')) URL.revokeObjectURL(n.src);
+} catch(_) {}
+});
+} catch(_) {}
+el.remove();
+}
+
+/* ---------------------------
+NEW: vanish helper — remove if both seen & not saved
+--------------------------- */
+function tryVanish(msgId){
+const idx = ephemeral.findIndex(m=>m.id===msgId);
+if (idx >= 0) {
+const m = ephemeral[idx];
+if (!m.saved && m.seenBy && m.seenBy.me && m.seenBy.other) {
+// If this was a media message, remove persisted media copy too (safety)
+if (m.from === 'me' && ['image','video','audio','file'].includes(m.type)) {
+deleteMediaFromDB(m.id).catch(()=>{});
+}
+ephemeral.splice(idx,1);
+persistEphemeral();
+removeMessageFromDOM(msgId);
+}
+}
+}
+
+function renderAll(){
+lane.innerHTML = '';
+ephemeral.forEach(msg => renderMessage(msg));
+lane.scrollTop = lane.scrollHeight;
+
+// cleanup: if any messages already meet vanish criteria (leftover ghosts), remove them now
+const copy = ephemeral.slice();
+copy.forEach(m => {
+if (m && !m.saved && m.seenBy && m.seenBy.me && m.seenBy.other) tryVanish(m.id);
+});
+}
+
+function renderMessage(msg){
+// avoid rendering duplicates: if element exists, update instead of duplicating
+const existingEl = document.querySelector(`[data-id="${msg.id}"]`);
+if (existingEl) {
+// update fields quickly and return
+try {
+const tsEl = existingEl.querySelector('.time');
+if (tsEl) tsEl.textContent = new Date(msg.time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+const savedMark = existingEl.querySelector('.saved-mark');
+if (msg.saved && !savedMark) {
+const star = document.createElement('span');
+star.className = 'saved-mark';
+star.textContent = '★';
+existingEl.querySelector('.bubble').appendChild(star);
+} else if (!msg.saved && savedMark) {
+savedMark.remove();
+}
+// update status indicator
+const st = existingEl.querySelector('.status-ind');
+if (st) {
+if (msg.from === 'me') {
+st.textContent = (msg.seenBy && msg.seenBy.other) ? '✓' : '⏳';
+st.className = 'status-ind ' + ((msg.seenBy && msg.seenBy.other) ? 'seen' : 'pending');
+} else {
+st.textContent = '';
+}
+}
+
+// Update media specific elements (progress bar or actual media)
+const contentDiv = existingEl.querySelector('.text');
+if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'file') {
+  if (msg.url && msg.url.startsWith('blob:') && msg.status === 'received') {
+    // Replace placeholder with actual media
+    contentDiv.innerHTML = ''; // Clear existing content
+    if (msg.type === 'image') {
+      const img = document.createElement('img');
+      img.className = 'media img';
+      img.src = msg.url;
+      img.alt = 'image';
+      contentDiv.appendChild(img);
+    } else if (msg.type === 'video') {
+      const v = document.createElement('video');
+      v.className = 'media vid';
+      v.src = msg.url;
+      v.controls = true;
+      contentDiv.appendChild(v);
+    } else if (msg.type === 'audio') {
+      const a = document.createElement('audio');
+      a.controls = true;
+      a.src = msg.url;
+      contentDiv.appendChild(a);
+    } else if (msg.type === 'file') {
+      const link = document.createElement('a');
+      link.href = msg.url;
+      link.download = msg.text || 'file';
+      link.textContent = 'Download ' + (msg.text || 'file');
+      link.className = 'media file-link';
+      contentDiv.appendChild(link);
+    }
+  } else if (msg.status === 'sending' || msg.status === 'receiving') {
+    let progressBar = contentDiv.querySelector('.media-progress-bar-inner');
+    if (progressBar) {
+      progressBar.style.width = `${msg.progress || 0}%`;
+    }
+  }
+}
+} catch(_) {}
+return;
+}
+
+const mb = document.createElement('div');
+mb.className = 'msg';
+mb.dataset.id = msg.id;
+mb.dataset.from = msg.from;
+
+const bubble = document.createElement('div');
+bubble.className = 'bubble ' + (msg.from === 'me' ? 'me' : 'them');
+
+// reply preview (single-line ellipsis)
+if (msg.replyToText) {
+const r = document.createElement('div');
+r.className = 'reply-preview';
+r.textContent = (msg.replyToFrom === 'me' ? meLabel : otherLabel) + ': ' + msg.replyToText;
+bubble.appendChild(r);
+}
+
+// content
+const content = document.createElement('div');
+content.className = 'text';
+
+if (msg.type === 'image' || msg.type === 'video' || msg.type === 'audio' || msg.type === 'file') {
+  if (msg.status === 'sending' || msg.status === 'receiving' || msg.status === 'pending') {
+    // Placeholder for media during chunked transfer
+    const placeholder = document.createElement('div');
+    placeholder.className = 'media-placeholder';
+    placeholder.textContent = `${msg.status === 'sending' ? 'Sending' : 'Receiving'} ${msg.type}...`;
+    const progressBarContainer = document.createElement('div');
+    progressBarContainer.className = 'media-progress-bar';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'media-progress-bar-inner';
+    progressBar.style.width = `${msg.progress || 0}%`;
+    progressBarContainer.appendChild(progressBar);
+    placeholder.appendChild(progressBarContainer);
+    content.appendChild(placeholder);
+
+    // If there's an object URL for an instant preview (local send)
+    if (msg.url && msg.url.startsWith('blob:') && msg.from === 'me') {
+        if (msg.type === 'image') {
+          const img = document.createElement('img');
+          img.className = 'media img';
+          img.src = msg.url;
+          img.alt = 'image preview';
+          content.appendChild(img);
+        } else if (msg.type === 'video') {
+          const v = document.createElement('video');
+          v.className = 'media vid';
+          v.src = msg.url;
+          v.controls = true;
+          content.appendChild(v);
+        }
+        // For audio and file, the placeholder is usually sufficient until received
+    }
+
+  } else if (msg.url && msg.status === 'received') {
+    if (msg.type === 'image') {
+      const img = document.createElement('img');
+      img.className = 'media img';
+      img.src = msg.url;
+      img.alt = 'image';
+      content.appendChild(img);
+    } else if (msg.type === 'video') {
+      const v = document.createElement('video');
+      v.className = 'media vid';
+      v.src = msg.url;
+      v.controls = true;
+      content.appendChild(v);
+    } else if (msg.type === 'audio') {
+      const a = document.createElement('audio');
+      a.controls = true;
+      a.src = msg.url;
+      content.appendChild(a);
+    } else if (msg.type === 'file') {
+      const link = document.createElement('a');
+      link.href = msg.url;
+      link.download = msg.text || 'file';
+      link.textContent = 'Download ' + (msg.text || 'file');
+      link.className = 'media file-link';
+      content.appendChild(link);
+    }
+  } else {
+      // Fallback for cases where status isn't clear or media is text-like (e.g. file name)
+      content.textContent = msg.text;
+  }
+} else {
+content.textContent = msg.text;
+}
+
+
+if (msg.edited && msg.type === 'text') {
+const edt = document.createElement('span');
+edt.className = 'edited';
+edt.textContent = ' • edited';
+content.appendChild(edt);
+}
+bubble.appendChild(content);
+
+// meta row
+const meta = document.createElement('div');
+meta.className = 'meta';
+const ts = document.createElement('span');
+ts.className = 'time';
+ts.textContent = new Date(msg.time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+meta.appendChild(ts);
+
+if (msg.saved) {
+const star = document.createElement('span');
+star.className = 'saved-mark';
+star.textContent = '★';
+meta.appendChild(star);
+}
+
+// status indicator for messages I sent (pending / seen)
+if (msg.from === 'me') {
+const st = document.createElement('span');
+st.className = 'status-ind ' + ((msg.seenBy && msg.seenBy.other) ? 'seen' : 'pending');
+st.textContent = (msg.seenBy && msg.seenBy.other) ? '✓' : '⏳';
+meta.appendChild(st);
+}
+
+bubble.appendChild(meta);
+
+// 3-dot control (menu on LEFT side for better space)
+const control = document.createElement('button');
+control.className = 'dot';
+control.textContent = '⋯';
+control.title = 'Options';
+control.onclick = (e) => openMenuFor(msg, control);
+bubble.appendChild(control);
+
+// assemble
+mb.appendChild(bubble);
+lane.appendChild(mb);
+
+// observe for "seen"
+try { seenObserver.observe(mb); } catch(_) {}
+
+lane.scrollTop = lane.scrollHeight;
+}
+
+/* ---------------------------
+CONTEXT MENU + ACTIONS
+--------------------------- */
+function openMenuFor(msg, anchorBtn){
+const tpl = document.getElementById('menuTemplate');
+const menu = tpl.cloneNode(true);
+menu.id = 'context_' + msg.id;
+menu.style.display = 'flex';
+menu.className = 'context-menu active';
+
+const isMine = msg.from === 'me';
+
+menu.querySelector('[data-action="reply"]').onclick = () => { closeAllMenus(); startReply(msg); };
+menu.querySelector('[data-action="edit"]').onclick = () => { closeAllMenus(); if (!isMine) return alert('You can only edit your messages.'); startEdit(msg); };
+menu.querySelector('[data-action="save"]').onclick = () => { closeAllMenus(); toggleSave(msg, true); };
+menu.querySelector('[data-action="unsave"]').onclick = () => { closeAllMenus(); toggleSave(msg, false); };
+menu.querySelector('[data-action="unsend"]').onclick = () => { closeAllMenus(); if (!isMine) return alert('You can only unsend your messages.'); unsendMessage(msg); };
+
+document.body.appendChild(menu);
+
+// Place LEFT of anchor for more space
+const rect = anchorBtn.getBoundingClientRect();
+const mw = 180; // max width set in CSS
+let left = rect.left - mw - 8;
+if (left < 8) left = 8;
+menu.style.left = left + 'px';
+menu.style.top = (rect.top - 4) + 'px';
+
+setTimeout(()=> window.addEventListener('click', closeAllMenus), 30);
+}
+function closeAllMenus(){
+document.querySelectorAll('.context-menu.active').forEach(n => n.remove());
+window.removeEventListener('click', closeAllMenus);
+}
+
+/* ---------------------------
+UX actions: Reply/Edit/Save/Unsend
+--------------------------- */
+let pendingReply = null;
+let pendingEdit = null;
+
+function startReply(msg){
+pendingReply = msg;
+const input = document.getElementById('msgInput');
+input.placeholder = 'Replying to: ' + (msg.from === 'me' ? meLabel : otherLabel) + ' — ' + (msg.text || '').slice(0, 40);
+input.focus();
+}
+
+function startEdit(msg){
+pendingEdit = msg;
+const input = document.getElementById('msgInput');
+input.value = msg.text || '';
+autoResizeInput();
+toggleSendButton();
+input.focus();
+}
+
+function toggleSave(msg, shouldSave){
+msg.saved = shouldSave;
+const idx = ephemeral.findIndex(m=>m.id===msg.id);
+if (idx>=0) ephemeral[idx] = msg;
+persistEphemeral();
+
+let saved = loadSaved();
+if (shouldSave) {
+if (!saved.find(s=>s.id===msg.id)) saved.unshift({...msg});
+} else {
+saved = saved.filter(s=>s.id!==msg.id);
+}
+saveSaved(saved);
+renderAll();
+refreshSavedPanel();
+}
+
+function unsendMessage(msg){
+// remove locally first
+ephemeral = ephemeral.filter(m=>m.id!==msg.id);
+persistEphemeral();
+// remove DOM (and unobserve)
+removeMessageFromDOM(msg.id);
+// delete any persisted media waiting to be sent (if applicable)
+if (msg.from === 'me' && ['image','video','audio','file'].includes(msg.type)) {
+deleteMediaFromDB(msg.id).catch(()=>{});
+}
+// inform peer
+try { if (typeof sendOverDataChannel === 'function') sendOverDataChannel({type:'unsend', id: msg.id}); } catch(_){}
+}
+
+/* ---------------------------
+SENDS (text/media/audio) & local echo
+--------------------------- */
+function pushMessage(obj){
+// Ensure seenBy.me true for my messages
+if (obj.from === 'me') {
+obj.seenBy = obj.seenBy || {me:true, other:false};
+obj.seenBy.me = true;
+}
+ephemeral.push(obj);
+persistEphemeral();
+renderMessage(obj);
+}
+
+/* ---------------------------
+Text send (mailbox fallback is handled in webrtc.js)
+--------------------------- */
+function sendLocalText(text){
+const msg = {
+id: newId(),
+from: 'me',
+type: 'text',
+text,
+time: Date.now(),
+saved: false,
+seenBy: {me:true, other:false}
+};
+pushMessage(msg);
+try { if (typeof sendOverDataChannel === 'function') sendOverDataChannel({type:'chat', payload: msg}); } catch(_){}
+}
+
+/* ---------------------------
+Media sending helpers
+- Persist media into IndexedDB before send so it survives reloads
+- Convert blob -> dataURL before sending (so DC can deliver it as JSON)
+- Keep persisted copy until peer actually sees the message (we remove on 'seen')
+--------------------------- */
+const CHUNK_SIZE = 65536; // 64KB
+
+async function queueAndSendMedia(blob, meta){
+const msgId = meta.id;
+const msgType = meta.type;
+const msgName = meta.name || '';
+const msgTime = meta.time || Date.now();
+const fileSize = blob.size;
+
+// Store metadata in IndexedDB (blob is stored directly, not converted to dataURL here)
+const entry = {
+id: msgId,
+type: msgType,
+name: msgName,
+time: msgTime,
+blob // store Blob directly
+};
+await saveMediaToDB(entry).catch(e => console.warn('saveMediaToDB failed', e));
+
+// Create a local message placeholder for the UI with an object URL for preview
+const objUrl = URL.createObjectURL(blob);
+const localMsg = {
+id: msgId,
+from: 'me',
+type: msgType,
+text: msgName,
+url: objUrl, // Object URL for instant local preview
+time: msgTime,
+saved: false,
+seenBy: {me:true, other:false},
+status: 'sending', // Indicate that sending is in progress
+progress: 0,
+size: fileSize
+};
+// push only if not already present, otherwise update
+const existingMsgIdx = ephemeral.findIndex(m=>m.id===msgId);
+if (existingMsgIdx === -1) {
+    pushMessage(localMsg);
+} else {
+    ephemeral[existingMsgIdx] = { ...ephemeral[existingMsgIdx], ...localMsg };
+    persistEphemeral();
+    renderMessage(ephemeral[existingMsgIdx]);
+}
+
+
+// Attempt immediate send via chunking (webrtc.js will handle the actual chunking logic)
+// The `sendMediaChunks` function will be provided by webrtc.js
+try {
+    if (typeof sendMediaChunks === 'function') {
+        sendMediaChunks(blob, msgId, msgType, msgName, msgTime, (progress) => {
+            // Update UI progress for this message
+            const idx = ephemeral.findIndex(m => m.id === msgId);
+            if (idx >= 0) {
+                ephemeral[idx].progress = progress;
+                persistEphemeral();
+                renderMessage(ephemeral[idx]);
+            }
+        });
+    } else {
+        console.warn('sendMediaChunks function not available; media will be queued for resend.');
+    }
+} catch (e) {
+    console.warn('Error calling sendMediaChunks:', e);
+}
+}
+
+
+/* attempt to resend all persisted media (used on init and periodically) */
+async function resendPersistedMedia(){
+try {
+const items = await getAllMediaFromDB();
+for (const it of items) {
+// if ephemeral doesn't have the message, create preview with pending status
+if (!ephemeral.find(m=>m.id === it.id)) {
+const objUrl = URL.createObjectURL(it.blob);
+pushMessage({
+id: it.id,
+from: 'me',
+type: it.type,
+text: it.name || '',
+url: objUrl,
+time: it.time || Date.now(),
+saved: false,
+seenBy: {me:true, other:false},
+status: 'pending', // Mark as pending until sent
+progress: 0,
+size: it.blob.size
+});
+} else {
+// ensure ephemeral has a preview URL (objectURL) when loaded from DB
+const em = ephemeral.find(m=>m.id===it.id);
+if (em && (!em.url || em.url.indexOf('blob:') !== 0)) {
+try { em.url = URL.createObjectURL(it.blob); persistEphemeral(); } catch(_) {}
+}
+}
+
+// Attempt to send via chunking (will be picked up by webrtc.js if DataChannel is available)
+if (typeof sendMediaChunks === 'function') {
+    // Re-queue for sending
+    sendMediaChunks(it.blob, it.id, it.type, it.name, it.time, (progress) => {
+        const idx = ephemeral.findIndex(m => m.id === it.id);
+        if (idx >= 0) {
+            ephemeral[idx].progress = progress;
+            ephemeral[idx].status = 'sending'; // Update status to sending
+            persistEphemeral();
+            renderMessage(ephemeral[idx]);
+        }
+    });
+} else {
+    console.warn('sendMediaChunks not available for resending persisted media.');
+}
+}
+} catch (e) {
+console.warn('resendPersistedMedia error', e);
+}
+}
+
+/* ---------------------------
+receive from peer (DataChannel or mailbox)
+--------------------------- */
+function handleIncoming(obj){
+if (!obj) return;
+if (obj.type === 'chat') {
+const m = obj.payload;
+// For text messages, directly push
+if (m.type === 'text') {
+    const msg = {
+        id: m.id || newId(),
+        from: 'other',
+        type: m.type,
+        text: m.text,
+        time: m.time || Date.now(),
+        saved: false,
+        replyToId: m.replyToId,
+        replyToText: m.replyToText,
+        replyToFrom: m.replyToFrom,
+        seenBy: m.seenBy || {me:false, other:true}
+    };
+    pushMessage(msg);
+} else if (m.type === 'media-metadata') {
+    // This is a metadata message for an incoming chunked media transfer
+    // Create a placeholder message in the UI
+    const msg = {
+        id: m.id,
+        from: 'other',
+        type: m.mediaType, // e.g., 'image', 'video'
+        text: m.filename,
+        time: m.time || Date.now(),
+        saved: false,
+        seenBy: {me:false, other:true},
+        status: 'receiving', // Indicate that receiving is in progress
+        progress: 0,
+        size: m.size // Total size of the media
+    };
+    pushMessage(msg);
+}
+// Actual media chunks are handled in webrtc.js, which then calls mediaReceivedCallback
+} else if (obj.type === 'unsend') {
+// peer unsent: remove locally if present
+ephemeral = ephemeral.filter(m => m.id !== obj.id);
+persistEphemeral();
+// remove DOM & unobserve
+removeMessageFromDOM(obj.id);
+} else if (obj.type === 'edit') {
+const idx = ephemeral.findIndex(m=>m.id===obj.payload.id);
+if (idx>=0) {
+ephemeral[idx].text = obj.payload.text;
+ephemeral[idx].edited = true;
+persistEphemeral();
+renderAll();
+}
+} else if (obj.type === 'seen') {
+const idx = ephemeral.findIndex(m=>m.id===obj.id);
+if (idx>=0) {
+ephemeral[idx].seenBy = ephemeral[idx].seenBy || {me:false, other:false};
+ephemeral[idx].seenBy.other = true;
+persistEphemeral();
+// If this message was media and we are the sender, remove persisted media (we keep only until peer saw it)
+const msg = ephemeral[idx];
+if (msg && msg.from === 'me' && ['image','video','audio','file'].includes(msg.type)) {
+// deleteMediaFromDB(msg.id).catch(()=>{}); // Handled by webrtc.js after successful chunk transfer and seen
+}
+// Now that peer acknowledged, we may vanish it if both sides have seen
+tryVanish(obj.id);
+renderAll();
+}
+}
+}
+
+// Callback from webrtc.js when a media file is fully received and reassembled
+function mediaReceivedCallback(mediaId, blob, type, filename, time) {
+    const url = URL.createObjectURL(blob);
+    const idx = ephemeral.findIndex(m => m.id === mediaId);
+    if (idx >= 0) {
+        ephemeral[idx].url = url;
+        ephemeral[idx].status = 'received';
+        ephemeral[idx].type = type; // Ensure type is correctly set from metadata
+        ephemeral[idx].text = filename; // Ensure filename is stored for display/download
+        persistEphemeral();
+        renderMessage(ephemeral[idx]); // Re-render to show the actual media
+    } else {
+        // This could happen if the page reloaded or the message was vanished somehow
+        // Push as a new message, assuming it's from 'other'
+        const msg = {
+            id: mediaId,
+            from: 'other',
+            type: type,
+            text: filename,
+            url: url,
+            time: time || Date.now(),
+            saved: false,
+            seenBy: {me:false, other:true},
+            status: 'received'
+        };
+        pushMessage(msg);
+    }
+}
+
+// Callback from webrtc.js to update progress for incoming media
+function mediaProgressCallback(mediaId, progress) {
+    const idx = ephemeral.findIndex(m => m.id === mediaId);
+    if (idx >= 0) {
+        ephemeral[idx].progress = progress;
+        ephemeral[idx].status = 'receiving';
+        persistEphemeral();
+        renderMessage(ephemeral[idx]);
+    }
+}
+
+/* ---------------------------
+EDIT / SEND button behaviour
+--------------------------- */
+const inputEl = document.getElementById('msgInput');
+
+document.getElementById('sendBtn').addEventListener('click', () => {
+const txt = (inputEl.value || '').trim();
+if (!txt && !pendingEdit) return;
+
+if (pendingEdit) {
+pendingEdit.text = txt;
+pendingEdit.edited = true;
+const idx = ephemeral.findIndex(m=>m.id===pendingEdit.id);
+if (idx>=0) ephemeral[idx] = pendingEdit;
+persistEphemeral();
+renderAll();
+try { if (typeof sendOverDataChannel === 'function') sendOverDataChannel({type:'edit', payload: { id: pendingEdit.id, text: pendingEdit.text}}); } catch(_){}
+pendingEdit = null;
+inputEl.value = '';
+inputEl.placeholder = 'Message...';
+autoResizeInput();
+toggleSendButton();
+return;
+}
+
+if (pendingReply) {
+const replyTo = pendingReply;
+const msg = {
+id: newId(),
+from: 'me',
+type: 'text',
+text: txt,
+time: Date.now(),
+saved: false,
+replyToId: replyTo.id,
+replyToText: replyTo.text,
+replyToFrom: replyTo.from,
+seenBy: {me:true, other:false}
+};
+pushMessage(msg);
+try { if (typeof sendOverDataChannel === 'function') sendOverDataChannel({type:'chat', payload: msg}); } catch(_){}
+pendingReply = null;
+inputEl.value = '';
+inputEl.placeholder = 'Message...';
+autoResizeInput();
+toggleSendButton();
+return;
+}
+
+sendLocalText(txt);
+inputEl.value = '';
+autoResizeInput();
+toggleSendButton();
+});
+
+/* keyboard: Enter to send, Shift+Enter newline */
+inputEl.addEventListener('keydown', (e)=>{
+if (e.key === 'Enter' && !e.shiftKey) {
+e.preventDefault();
+document.getElementById('sendBtn').click();
+}
+});
+
+/* auto-grow textarea + send button toggle */
+function autoResizeInput(){
+inputEl.style.height = 'auto';
+inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px'; // up to ~5 lines
+}
+function toggleSendButton(){
+const hasText = (inputEl.value.trim().length > 0) || pendingEdit;
+document.getElementById('rightIcons').style.display = hasText ? 'none' : 'flex';
+document.getElementById('sendWrap').style.display = hasText ? 'flex' : 'none';
+}
+inputEl.addEventListener('input', ()=>{ autoResizeInput(); toggleSendButton(); });
+autoResizeInput(); toggleSendButton();
+
+/* ---------------------------
+Saved panel UI
+--------------------------- */
+const savedPanel = document.getElementById('savedPanel');
+const savedList = document.getElementById('savedList');
+document.getElementById('closeSaved').addEventListener('click', ()=>savedPanel.classList.remove('open'));
+
+function refreshSavedPanel(){
+const saved = loadSaved();
+savedList.innerHTML = '';
+if (!saved || saved.length===0) {
+savedList.innerHTML = '<div class="saved-empty">No saved messages</div>';
+return;
+}
+saved.forEach(m => {
+const node = document.createElement('div');
+node.className = 'saved-item';
+
+// Safely create and append elements for user-generated content
+const savedTextDiv = document.createElement('div');
+savedTextDiv.className = 'saved-text';
+savedTextDiv.textContent = m.text || m.type; // Use textContent for safety
+node.appendChild(savedTextDiv);
+
+const savedMetaDiv = document.createElement('div');
+savedMetaDiv.className = 'saved-meta';
+savedMetaDiv.textContent = new Date(m.time).toLocaleString(); // Use textContent for safety
+node.appendChild(savedMetaDiv);
+
+const savedActionsDiv = document.createElement('div');
+savedActionsDiv.className = 'saved-actions';
+const unsaveButton = document.createElement('button');
+unsaveButton.className = 'small';
+unsaveButton.dataset.id = m.id;
+unsaveButton.dataset.act = 'unsave';
+unsaveButton.textContent = 'Unsave'; // Use textContent for safety
+savedActionsDiv.appendChild(unsaveButton);
+node.appendChild(savedActionsDiv);
+
+savedList.appendChild(node);
+});
+
+savedList.querySelectorAll('[data-act="unsave"]').forEach(b=>{
+b.onclick = () => {
+const id = b.dataset.id;
+let arr = loadSaved().filter(s=>s.id!==id);
+saveSaved(arr);
+ephemeral.forEach((em)=> { if (em.id===id) em.saved = false; });
+persistEphemeral();
+refreshSavedPanel();
+renderAll();
+};
+});
+}
+
+/* ---------------------------
+In-app navigation
+--------------------------- */
+document.getElementById('btnHome').addEventListener('click', ()=> {
+// vanish ONLY the fully-seen messages here, keep unsaved/unseen ones (Snap-like)
+ephemeral = ephemeral.filter(m => m.saved || !(m.seenBy && m.seenBy.me && m.seenBy.other));
+persistEphemeral();
+
+// Teardown observers & revoke blob URLs (prevent "hangs" and free resources)
+try { seenObserver.disconnect(); } catch(_) {}
+try {
+document.querySelectorAll('.msg .media').forEach(n => {
+try { if (n.src && n.src.startsWith('blob:')) URL.revokeObjectURL(n.src); } catch(_) {}
+});
+} catch(_) {}
+
+// stay logged in; just go home (no locking)
+__navTarget = "home";
+// minor delay to ensure __navTarget is set before navigation begins
+setTimeout(()=> location.href = 'home.html', 10);
+});
+
+document.getElementById('btnChat').addEventListener('click', ()=> {
+__navTarget = "chat"; // noop (already here)
+});
+
+document.getElementById('btnMenu').addEventListener('click', ()=> {
+const open = savedPanel.classList.toggle('open');
+if (open) refreshSavedPanel();
+});
+
+/* ---------------------------
+Media: camera live, gallery/file, voice
+--------------------------- */
+document.getElementById('cameraLive').addEventListener('click', async ()=>{
+try {
+const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+// take a snapshot
+const track = stream.getVideoTracks()[0];
+const img = new ImageCapture(track);
+const bitmap = await img.grabFrame();
+const canvas = document.createElement('canvas');
+canvas.width = bitmap.width; canvas.height = bitmap.height;
+const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0);
+// convert canvas to blob
+const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85));
+track.stop();
+
+const id = newId();
+await queueAndSendMedia(blob, { id, type: 'image', name: 'snapshot.jpg', time: Date.now() });
+} catch(e) {
+alert('Camera not available.');
+}
+});
+
+document.getElementById('pickGallery').addEventListener('click', ()=> document.getElementById('galleryInput').click());
+document.getElementById('galleryInput').addEventListener('change', async (e)=>{
+const f = e.target.files[0]; if (!f) return;
+const kind = f.type.startsWith('video/') ? 'video' : 'image';
+const id = newId();
+await queueAndSendMedia(f, { id, type: kind, name: f.name, time: Date.now() });
+e.target.value = '';
+});
+
+document.getElementById('pickFile').addEventListener('click', ()=> document.getElementById('fileInput').click());
+document.getElementById('fileInput').addEventListener('change', async (e)=>{
+const f = e.target.files[0]; if (!f) return;
+const id = newId();
+await queueAndSendMedia(f, { id, type: 'file', name: f.name, time: Date.now() });
+e.target.value = '';
+});
+
+// voice recorder (simple)
+let mediaRec = null, voiceChunks = [];
+document.getElementById('voiceRec').addEventListener('click', async ()=>{
+if (!mediaRec) {
+try {
+const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+mediaRec = new MediaRecorder(stream);
+voiceChunks = [];
+mediaRec.ondataavailable = e => { if (e.data.size) voiceChunks.push(e.data); };
+mediaRec.onstop = async () => {
+const blob = new Blob(voiceChunks, {type: 'audio/webm'});
+const id = newId();
+await queueAndSendMedia(blob, { id, type: 'audio', name: 'voice.webm', time: Date.now() });
+mediaRec.stream.getTracks().forEach(t=>t.stop());
+mediaRec = null;
+};
+mediaRec.start();
+document.getElementById('voiceRec').textContent = '⏹️'; // stop icon
+} catch(e){ alert('Microphone not available.'); }
+} else {
+mediaRec.stop();
+document.getElementById('voiceRec').textContent = '🎤';
+}
+});
+
+
+/* ---------------------------
+Init & persistence: resend persisted media & hydrate previews
+--------------------------- */
+refreshSavedPanel();
+renderAll();
+
+// Periodically attempt to resend persisted media until peer receives them.
+// Also attempt an initial resend when sendOverDataChannel becomes available.
+let resendIntervalHandle = null;
+async function startResendLoop(){
+// initial attempt (may run before webrtc.js loaded)
+await resendPersistedMedia().catch(()=>{});
+if (resendIntervalHandle) clearInterval(resendIntervalHandle);
+// Keep trying periodically (handles cases where user reconnects later)
+resendIntervalHandle = setInterval(() => {
+// only attempt if sendOverDataChannel is present — but we still call resendPersistedMedia which checks
+resendPersistedMedia().catch(()=>{});
+}, 8000);
+}
+
+// Wait for sendOverDataChannel to exist (webrtc.js will attach it)
+function waitForSendApi(timeout = 10000){
+return new Promise((resolve) => {
+const start = Date.now();
+const check = () => {
+// Now checking for sendMediaChunks, not just sendOverDataChannel
+if (typeof sendOverDataChannel === 'function' && typeof sendMediaChunks === 'function') return resolve(true);
+if (Date.now() - start > timeout) return resolve(false);
+setTimeout(check, 150);
+};
+check();
+});
+}
+
+/* ---------------------------
+NEW: wait for fetchMailbox API (webrtc.js) and run it
+- This actively fetches any saved text messages in Firestore mailboxes
+- Ensures messages saved while the recipient was offline are delivered when they open the chat
+--------------------------- */
+function waitForMailboxApiAndFetch(timeout = 15000){
+return new Promise((resolve) => {
+const start = Date.now();
+const check = async () => {
+if (typeof fetchMailbox === 'function') {
+try {
+const items = await fetchMailbox();
+console.log('mailbox delivered items:', items && items.length);
+} catch (e) {
+console.warn('fetchMailbox call failed', e);
+}
+return resolve(true);
+}
+if (Date.now() - start > timeout) return resolve(false);
+setTimeout(check, 150);
+};
+check();
+});
+}
+
+// Start the resend loop once page has loaded and webrtc.js likely registered sendOverDataChannel
+window.addEventListener('load', async () => {
+const available = await waitForSendApi(15000);
+// regardless of availability we start the resend loop which will attempt sends repeatedly
+startResendLoop();
+
+// Wait for fetchMailbox() (added in webrtc.js) and call it to fetch any pending texts
+const mb = await waitForMailboxApiAndFetch(15000);
+if (!mb) console.warn('fetchMailbox not available after timeout');
+});
+
+// Prevent navigation via back/forward
+history.pushState(null, null, location.href);
+window.onpopstate = function () { history.go(1); };
+
+// Expose callbacks to webrtc.js
+window.mediaReceivedCallback = mediaReceivedCallback;
+window.mediaProgressCallback = mediaProgressCallback;
+</script>
+<!-- make sure firebase + firestore SDKs are loaded in chat.html BEFORE this file -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="/webrtc.js"></script>
+</body>
+</html>
